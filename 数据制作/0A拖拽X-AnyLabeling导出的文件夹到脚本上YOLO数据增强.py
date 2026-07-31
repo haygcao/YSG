@@ -44,6 +44,11 @@ EXCLUDED_ANGLES = {0,90, 180, 270}
 # 角度总开关：False 时完全不做角度旋转（仅执行镜像/翻转增强）
 ENABLE_ANGLE_ROTATION = True
 
+# 旋转增强前，若原始 OBB TXT 已包含这些类别ID，则跳过该图片的旋转。
+# 注意：检查发生在 LABEL_ID_REPLACE_MAP 替换之前；命中后跳过旋转、镜像和类别替换。
+ENABLE_ROTATION_LABEL_EXCLUSION = True
+ROTATION_EXCLUDED_LABEL_IDS = {2, 4}
+
 # 是否启用“指定范围模式” True/False（仅当 ENABLE_ANGLE_ROTATION=True 时生效）
 USE_ANGLE_RANGE = True
 # 指定角度范围/列表（顺时针），示例："0, 30,45,60" 或 "300-358" 或 "10-20, 90, 120-125"
@@ -287,6 +292,36 @@ ENABLE_REPLACE_ORIGINAL = True
 # 旋转支持：
 # - 如果 BORDER_MODE = 'expand'，旋转会被自动禁用（尺寸会变化）
 # - 如果 BORDER_MODE = 'constant' 或 'replicate'，可以使用旋转（保持原尺寸）
+# ========================================================================
+
+# ========================================================================
+# 【安全确认】执行前确认开关
+# ========================================================================
+REQUIRE_CONFIRMATION = False
+# 是否在执行前需要手动确认
+# True: 执行前显示警告并要求输入 yes 确认（安全模式，推荐）
+# False: 直接执行，不需要确认（快速模式，适合批量处理）
+#
+# 注意：
+# - 仅在 ENABLE_REPLACE_ORIGINAL = True（原图替换模式）时生效
+# - 如果设置为 False，将直接覆盖原文件，请务必提前备份！
+# ========================================================================
+
+# ========================================================================
+# 【日志文件】是否生成增强日志
+# ========================================================================
+ENABLE_LOG_FILE = True
+# 是否生成增强日志文件
+# True: 生成详细的增强日志文件（.log格式）
+# False: 不生成日志文件
+#
+# 日志内容包括：
+# - 每张图片的增强记录（旋转角度、应用的增强类型等）
+# - 未处理的图片列表
+# - 增强类型统计
+# - 旋转角度统计
+#
+# 日志保存位置：拖拽文件夹的同目录
 # ========================================================================
 
 
@@ -817,6 +852,25 @@ def detect_label_format(txt_path):
         return None
 
 
+def has_original_excluded_obb_label(txt_path):
+    """在类别ID替换前检查原始 OBB TXT 是否包含指定类别。"""
+    if not ENABLE_ROTATION_LABEL_EXCLUSION or not os.path.exists(txt_path):
+        return False
+    try:
+        with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 9:
+                    try:
+                        if int(float(parts[0])) in ROTATION_EXCLUDED_LABEL_IDS:
+                            return True
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        pass
+    return False
+
+
 def transform_hbb_labels(txt_path, save_path, M_total, in_size, out_size):
     """
     使用仿射矩阵变换 YOLO 水平框标签（仅镜像/翻转，不支持旋转）
@@ -883,7 +937,7 @@ def transform_hbb_labels(txt_path, save_path, M_total, in_size, out_size):
         f.write("\n".join(new_lines))
 
 
-def rotate_obb_labels(txt_path, save_path, M_total, in_size, out_size):
+def rotate_obb_labels(txt_path, save_path, M_total, in_size, out_size, replace_ids=True):
     """
     使用组合仿射矩阵 M_total（先镜像/翻转，再旋转，若有）变换 YOLO-OBB 标签。
     txt 格式：cls x1 y1 x2 y2 x3 y3 x4 y4（归一化）
@@ -908,7 +962,7 @@ def rotate_obb_labels(txt_path, save_path, M_total, in_size, out_size):
         cls = parts[0]
         
         # 类别ID替换（仅针对OBB标签）
-        if ENABLE_LABEL_ID_REPLACE:
+        if replace_ids and ENABLE_LABEL_ID_REPLACE:
             try:
                 cls_id = int(cls)
                 if cls_id in LABEL_ID_REPLACE_MAP:
@@ -1075,6 +1129,7 @@ def _process_single_image_worker(img_name):
         augmentation_img_set = config['augmentation_img_set']
         flip_modes = config['flip_modes']
         noise_types = config['noise_types']
+        rotation_excluded_img_set = config.get('rotation_excluded_img_set', set())
         
         img_path = os.path.join(folder_path, img_name)
         name_no_ext = os.path.splitext(img_name)[0]
@@ -1089,7 +1144,8 @@ def _process_single_image_worker(img_name):
         H0, W0 = img.shape[:2]
         
         # 确定角度列表
-        if angle_rotation_enabled and len(angles) > 0:
+        skip_rotation = img_name in rotation_excluded_img_set
+        if angle_rotation_enabled and len(angles) > 0 and not skip_rotation:
             if use_random_angle:
                 angle_list = random.sample(angles, min(random_angle_count, len(angles)))
             else:
@@ -1102,11 +1158,11 @@ def _process_single_image_worker(img_name):
             should_apply_augmentation = img_name in augmentation_img_set
             
             # 决定增强
-            apply_rotation = rotation_angle is not None
+            apply_rotation = rotation_angle is not None and not skip_rotation
             apply_mirror = False
             mirror_mode = None
             
-            if not apply_rotation and ENABLE_MIRROR_FLIP and len(flip_modes) > 0 and should_apply_augmentation:
+            if not apply_rotation and not skip_rotation and ENABLE_MIRROR_FLIP and len(flip_modes) > 0 and should_apply_augmentation:
                 if random.choice([True, False]):
                     mirror_mode = random.choice([m for m in flip_modes if m != 'none'])
                     if mirror_mode:
@@ -1203,7 +1259,8 @@ def _process_single_image_worker(img_name):
                 try:
                     label_format = detect_label_format(txt_path)
                     if label_format == 'obb':
-                        rotate_obb_labels(txt_path, save_txt_path, M_transform, (W0, H0), out_size)
+                        rotate_obb_labels(txt_path, save_txt_path, M_transform, (W0, H0), out_size,
+                                          replace_ids=not skip_rotation)
                         label_ok = True
                     elif label_format == 'hbb' and not apply_rotation:
                         transform_hbb_labels(txt_path, save_txt_path, M_transform, (W0, H0), out_size)
@@ -1401,6 +1458,14 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
         print_safe("未找到图片文件。")
         return
 
+    # 使用原始 TXT 建立排除集合；此时尚未执行类别ID替换。
+    rotation_excluded_img_set = set()
+    if angle_rotation_enabled and ENABLE_ROTATION_LABEL_EXCLUSION:
+        for image_name in img_files:
+            txt_path = os.path.join(folder_path, os.path.splitext(image_name)[0] + ".txt")
+            if detect_label_format(txt_path) == 'obb' and has_original_excluded_obb_label(txt_path):
+                rotation_excluded_img_set.add(image_name)
+
     # 检查原图替换模式，确定实际使用的角度模式参数
     use_random_angle = USE_RANDOM_ANGLE
     random_angle_count = RANDOM_ANGLE_COUNT
@@ -1459,10 +1524,10 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
     if angle_rotation_enabled:
         if use_random_angle:
             # 单角度或多角度模式
-            total_tasks = len(selected_img_files) * random_angle_count
+            total_tasks = sum(1 if f in rotation_excluded_img_set else random_angle_count for f in selected_img_files)
         else:
             # 全角度模式
-            total_tasks = len(selected_img_files) * len(angles)
+            total_tasks = sum(1 if f in rotation_excluded_img_set else len(angles) for f in selected_img_files)
     else:
         # 无旋转模式
         total_tasks = len(selected_img_files)
@@ -1505,6 +1570,8 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
     if ENABLE_LABEL_ID_REPLACE:
         print_safe(f"类别ID替换: 开启（仅OBB标签）")
         print_safe(f"  映射: {LABEL_ID_REPLACE_MAP}")
+    if ENABLE_ROTATION_LABEL_EXCLUSION:
+        print_safe(f"原始标签类别 {sorted(ROTATION_EXCLUDED_LABEL_IDS)} 跳过旋转: {len(rotation_excluded_img_set)} 张")
     
     print_safe(f"预计生成: {total_tasks} 张增强图")
     if queue_total > 1:
@@ -1544,7 +1611,8 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
             'random_angle_count': random_angle_count,
             'augmentation_img_set': augmentation_img_set,
             'flip_modes': flip_modes,
-            'noise_types': noise_types
+            'noise_types': noise_types,
+            'rotation_excluded_img_set': rotation_excluded_img_set
         }
         
         # 使用多进程池
@@ -1610,9 +1678,10 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
                 continue
             
             H0, W0 = img.shape[:2]
+            skip_rotation = img_name in rotation_excluded_img_set
             
             # 确定要生成的角度列表
-            if angle_rotation_enabled and len(angles) > 0:
+            if angle_rotation_enabled and len(angles) > 0 and not skip_rotation:
                 if use_random_angle:
                     # 随机角度模式：随机选择N个不同角度
                     angle_list = random.sample(angles, min(random_angle_count, len(angles)))
@@ -1643,10 +1712,10 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
                     M_transform = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
                     out_size = (W0, H0)
                     
-                    if rotation_angle is not None:
+                    if rotation_angle is not None and not skip_rotation:
                         # 旋转模式：使用指定角度
                         apply_rotation = True
-                    elif ENABLE_MIRROR_FLIP and len(flip_modes) > 0 and should_apply_augmentation:
+                    elif not skip_rotation and ENABLE_MIRROR_FLIP and len(flip_modes) > 0 and should_apply_augmentation:
                         # 镜像模式：随机决定是否镜像（仅当允许增强时）
                         if random.choice([True, False]):
                             mirror_mode = random.choice([m for m in flip_modes if m != 'none'])
@@ -1717,7 +1786,7 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
                                 available_enhancements.append('scanline')
                             if ENABLE_NOISE and noise_types:
                                 available_enhancements.extend(noise_types)
-                            if ENABLE_MIRROR_FLIP and len(flip_modes) > 0:
+                            if not skip_rotation and ENABLE_MIRROR_FLIP and len(flip_modes) > 0:
                                 available_enhancements.append('mirror')
                             
                             if available_enhancements:
@@ -1824,7 +1893,8 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
                             
                             if label_format == 'obb':
                                 # OBB格式
-                                rotate_obb_labels(txt_path, save_txt_path, M_transform, (W0, H0), out_size)
+                                rotate_obb_labels(txt_path, save_txt_path, M_transform, (W0, H0), out_size,
+                                                  replace_ids=not skip_rotation)
                                 stats["label_processed"] += 1
                             elif label_format == 'hbb':
                                 # 水平框格式
@@ -1927,12 +1997,16 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
     print_safe(f"总用时: {format_timedelta(elapsed)}")
     print_safe("=" * 60)
     
-    # 保存增强日志（保存到脚本所在目录）
-    if augmentation_log:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+    # 保存增强日志（保存到拖拽文件夹的同目录）
+    # 日志包含增强记录、排除类别跳过记录和未处理列表。
+    # 只要其中任一类存在就生成，避免遗漏“只有跳过/未处理”的批次。
+    unprocessed_for_log = [f for f in img_files if f not in selected_img_files]
+    if ENABLE_LOG_FILE and (augmentation_log or rotation_excluded_img_set or unprocessed_for_log):
+        # 获取拖拽文件夹的父目录
+        parent_dir = os.path.dirname(folder_path)
         folder_name = os.path.basename(folder_path)
         log_filename = f"增强日志_{folder_name}_{time.strftime('%Y%m%d_%H%M%S')}.log"
-        log_path = os.path.join(script_dir, log_filename)
+        log_path = os.path.join(parent_dir, log_filename)
         
         try:
             with open(log_path, "w", encoding="utf-8") as log_file:
@@ -1953,55 +2027,43 @@ def process_folder_all(folder_path, queue_current=1, queue_total=1):
                     log_file.write(f"生成增强图: {stats['ok']} 张\n")
                     log_file.write(f"未处理原图: {total_imgs - len(selected_img_files)} 张\n")
                 log_file.write(f"增强比例: {AUGMENTATION_RATIO * 100:.1f}%\n")
+                log_file.write(f"原始标签排除类别: {sorted(ROTATION_EXCLUDED_LABEL_IDS)}\n")
+                log_file.write(f"原始标签命中排除类别的图片: {len(rotation_excluded_img_set)} 张\n")
                 log_file.write("=" * 80 + "\n\n")
-                
-                # 按原图分组
-                if ENABLE_REPLACE_ORIGINAL:
-                    log_file.write("已替换的原图列表：\n")
-                else:
-                    log_file.write("详细增强记录：\n")
+
+                # 每张图片一行，最后再汇总跳过和未执行列表。
+                log_file.write("逐图片详细记录：\n")
                 log_file.write("-" * 80 + "\n")
-                
-                current_original = None
+                entries_by_original = {}
                 for entry in augmentation_log:
-                    if entry['original'] != current_original:
-                        if current_original is not None:
-                            log_file.write("\n")
-                        current_original = entry['original']
-                        if ENABLE_REPLACE_ORIGINAL:
-                            log_file.write(f"\n✓ 已替换: {entry['original']}\n")
+                    entries_by_original.setdefault(entry['original'], []).append(entry)
+                for image_index, img in enumerate(sorted(img_files), 1):
+                    entries = entries_by_original.get(img, [])
+                    if entries:
+                        details = []
+                        for entry in entries:
+                            details.extend(entry.get('enhancements', []))
+                        details = list(dict.fromkeys(details))
+                        angles_used = sorted({e['angle'] for e in entries if e.get('angle') is not None})
+                        if angles_used:
+                            details.append("角度=" + ",".join(f"{a}度" for a in angles_used))
+                        if img in rotation_excluded_img_set:
+                            log_file.write(f"{img} | 执行={'、'.join(details) if details else '无'} | "
+                                           "跳过：类别替换、角度旋转、镜像反转\n")
                         else:
-                            log_file.write(f"\n原图: {entry['original']}\n")
-                    
-                    enhancements_str = " + ".join(entry['enhancements']) if entry['enhancements'] else "无增强"
-                    
-                    if ENABLE_REPLACE_ORIGINAL:
-                        if entry['angle'] is not None:
-                            log_file.write(f"   旋转角度: {entry['angle']}度\n")
-                        log_file.write(f"   应用增强: {enhancements_str}\n")
-                    else:
-                        log_file.write(f"  → {entry['output']}\n")
-                        if entry['angle'] is not None:
-                            log_file.write(f"     旋转角度: {entry['angle']}度\n")
-                        log_file.write(f"     增强: {enhancements_str}\n")
-                
-                # 未处理的原图列表
-                if not ENABLE_REPLACE_ORIGINAL:
-                    unprocessed_imgs = [f for f in img_files if f not in selected_img_files]
-                    if unprocessed_imgs:
-                        log_file.write("\n\n" + "=" * 80 + "\n")
-                        log_file.write(f"未处理的原图列表（共 {len(unprocessed_imgs)} 张）：\n")
-                        log_file.write("-" * 80 + "\n")
-                        for img in sorted(unprocessed_imgs):
-                            log_file.write(f"  • {img}\n")
-                else:
-                    unprocessed_imgs = [f for f in img_files if f not in selected_img_files]
-                    if unprocessed_imgs:
-                        log_file.write("\n\n" + "=" * 80 + "\n")
-                        log_file.write(f"未替换的原图列表（共 {len(unprocessed_imgs)} 张）：\n")
-                        log_file.write("-" * 80 + "\n")
-                        for img in sorted(unprocessed_imgs):
-                            log_file.write(f"  • {img}\n")
+                            details.append("类别替换")
+                            log_file.write(f"{img} | 执行={'、'.join(details)}\n")
+                    elif img in unprocessed_for_log:
+                        log_file.write(f"{img} | 未执行：根据比例没有在随机比例内\n")
+
+                log_file.write("\n跳过汇总：\n")
+                log_file.write(f"跳过 {len(rotation_excluded_img_set)} 张\n")
+                for image_name in sorted(rotation_excluded_img_set):
+                    log_file.write(f"{image_name} | 跳过原因：原始TXT包含类别 {sorted(ROTATION_EXCLUDED_LABEL_IDS)}，跳过类别替换、角度旋转、镜像反转\n")
+                log_file.write("\n未执行汇总：\n")
+                log_file.write(f"未执行 {len(unprocessed_for_log)} 张\n")
+                for image_name in sorted(unprocessed_for_log):
+                    log_file.write(f"{image_name} | 未执行原因：根据比例没有在随机比例内\n")
                 
                 log_file.write("\n" + "=" * 80 + "\n")
                 log_file.write("增强类型统计：\n")
@@ -2083,14 +2145,20 @@ if __name__ == "__main__":
     # 根据模式选择处理方式
     if ENABLE_REPLACE_ORIGINAL:
         # 原图替换模式
-        print_safe("⚠️  警告：原图替换模式将直接覆盖原文件！")
-        print_safe("⚠️  建议先备份数据！")
-        print_safe("")
-        confirm = input("确认继续？(输入 yes 继续): ").strip().lower()
-        if confirm != "yes":
-            print_safe("已取消操作。")
-            input("按回车退出...")
-            sys.exit()
+        if REQUIRE_CONFIRMATION:
+            # 需要手动确认
+            print_safe("⚠️  警告：原图替换模式将直接覆盖原文件！")
+            print_safe("⚠️  建议先备份数据！")
+            print_safe("")
+            confirm = input("确认继续？(输入 yes 继续): ").strip().lower()
+            if confirm != "yes":
+                print_safe("已取消操作。")
+                input("按回车退出...")
+                sys.exit()
+        else:
+            # 不需要确认，直接执行
+            print_safe("⚠️  原图替换模式：将直接覆盖原文件（已禁用确认）")
+            print_safe("")
     
     # 依次处理每个文件夹
     total_folders = len(folders)
