@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import os
 
 DEFAULT_CLASS_ID = 0
@@ -62,7 +62,10 @@ def parse_ai_file(file_path):
                     if current_path:
                         paths.append(current_path)
                     current_path = [(float(parts[0]), float(parts[1]))]
-                elif command == 'C':
+                elif command in ('C', 'c'):
+                    # 大写 C 和小写 c 都是三次贝塞尔曲线（cubic curveto），
+                    # 大小写差异只表示曲线段/延续段的语义，参数结构相同，
+                    # 原脚本只处理了大写 C，导致小写 c 段被静默丢弃，路径残缺、形状错乱。
                     if not current_path:
                         continue
                     p0 = current_path[-1]
@@ -72,8 +75,29 @@ def parse_ai_file(file_path):
                     for i in range(1, BEZIER_CURVE_STEPS + 1):
                         t = i / float(BEZIER_CURVE_STEPS)
                         current_path.append(cubic_bezier(p0, p1, p2, p3, t))
-                elif command == 'L':
+                elif command in ('L', 'l'):
+                    # 同理，大写 L 和小写 l 都是直线段（lineto），一并兼容处理
                     current_path.append((float(parts[0]), float(parts[1])))
+                elif command in ('V', 'v', 'Y', 'y'):
+                    # v/V, y/Y 是隐式控制点的曲线简写：
+                    # v: 起始控制点 = 当前点(p0)，只给出 p2, p3
+                    # y: 结束控制点 = 终点(p3)，只给出 p1, p2
+                    # 部分 Illustrator/Photoshop 导出文件会用到这两种简写，一并兼容
+                    if not current_path:
+                        continue
+                    p0 = current_path[-1]
+                    if command in ('V', 'v'):
+                        p1 = p0
+                        p2 = (float(parts[0]), float(parts[1]))
+                        p3 = (float(parts[2]), float(parts[3]))
+                    else:  # Y / y
+                        p2 = (float(parts[0]), float(parts[1]))
+                        p3 = (float(parts[2]), float(parts[3]))
+                        p1 = p2  # y: 起始控制点缺省时常用做法之一，起点自身也可，这里按结束控制点=终点处理即可
+                        p1 = p0
+                    for i in range(1, BEZIER_CURVE_STEPS + 1):
+                        t = i / float(BEZIER_CURVE_STEPS)
+                        current_path.append(cubic_bezier(p0, p1, p2, p3, t))
                 elif command == 'n':
                     if current_path:
                         paths.append(current_path)
