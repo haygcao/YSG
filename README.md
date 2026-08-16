@@ -4,10 +4,11 @@
 <img src="https://github.com/user-attachments/assets/0439e6bf-c256-4706-a846-1043643d4cc1" width="256" height="256">
 </div>
 
-我的频道
+# <div align="center">我的频道</div>
 
-淫叔馆TG频道
-https://t.me/yinshuguan
+# <div align="center">淫叔馆TG频道</div>
+
+# <div align="center">https://t.me/yinshuguan</div>
 
 ![image](https://github.com/user-attachments/assets/31755751-1c89-4484-8d1a-98e6fc95d079)
 
@@ -30,11 +31,11 @@ https://t.me/yinshuguan
 
 排除各种现有OCR技术无法识别的拟声词 （我都看机翻了我还在乎你拟声词吗？）
 
-为本模型专门魔改的专用工具
-
-https://github.com/lhj5426/X-AnyLabeling
-
 模型已上传到 https://huggingface.co/YSGforMTL/YSGYoloDetector
+
+# <div align="center">为本模型专属打造的超跑座驾</div>
+
+# <div align="center">https://github.com/lhj5426/X-AnyLabeling</div>
 
  视频演示
 
