@@ -27,15 +27,13 @@
 
 少量dlsite 上的 ASMR音声商品宣传介绍图图片 为了数据的多样性 
 
-使用 [X-AnyLabeling](https://github.com/CVHub520/X-AnyLabelin) 
+使用为本模型专属打造的超跑座驾 [YSG-AnyLabeling](https://github.com/lhj5426/X-AnyLabeling) 进行标注
 
 排除各种现有OCR技术无法识别的拟声词 （我都看机翻了我还在乎你拟声词吗？）
 
 模型已上传到 https://huggingface.co/YSGforMTL/YSGYoloDetector
 
-# <div align="center">为本模型专属打造的超跑座驾</div>
 
-# <div align="center">https://github.com/lhj5426/X-AnyLabeling</div>
 
  视频演示
 
